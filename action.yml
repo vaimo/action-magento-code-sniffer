@@ -1,0 +1,77 @@
+name: 'Magento Code Sniffer'
+description: 'This action is used to evaluate the quality of code by utilizing code sniffer.'
+author: Patryk Waluś <patryk.walus@vaimo.com>
+inputs:
+  directories:
+    description: 'Select directories that should be evaluated (separated by comma).'
+    required: true
+  working-directory:
+    description: 'Set working directory for your action.'
+    required: false
+  full-analysis:
+    description: 'Perform full analysis if true, if false only analysis of modified files.'
+    required: true
+    default: 'true'
+runs:
+  using: "composite"
+  steps:
+    - name: Git checkout
+      uses: vaimo/action-git-checkout@v1
+      with:
+        working-directory: ${{inputs.working-directory}}
+
+    - name: Overwrite the default phpcs.xml
+      shell: bash
+      run: |
+        if [ -f $GITHUB_WORKSPACE/coding-standards/code-sniffer/phpcs.xml ]; then
+          echo "The $GITHUB_WORKSPACE/coding-standards/code-sniffer/phpcs.xml file exists."
+          echo "Overwriting the root phpcs.xml file..."
+          cp $GITHUB_WORKSPACE/coding-standards/code-sniffer/phpcs.xml phpcs.xml
+        else
+          echo "The $GITHUB_WORKSPACE/coding-standards/code-sniffer/phpcs.xml file does not exist."
+          echo "Using the default phpcs.xml."
+          cp /var/www/coding-standards/phpcs.xml phpcs.xml
+        fi
+
+    - name: Get modified files
+      if: inputs.full-analysis == 'false'
+      id: modified-files
+      uses: tj-actions/changed-files@v45
+      with:
+        files: |
+          **.php
+
+    - name: Convert modified files to space-separated string
+      id: convert-files
+      shell: bash
+      env:
+        ALL_CHANGED_FILES: ${{ steps.modified-files.outputs.all_changed_files }}
+        ALL_CHANGED_FILES_COUNT: ${{ steps.modified-files.outputs.all_changed_files_count }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        MODIFIED_FILES=$(echo "${ALL_CHANGED_FILES}" | tr '\n' ' ')
+        if [ -n "$WORKING_DIRECTORY" ]; then
+          MODIFIED_FILES=$(echo "$MODIFIED_FILES" | sed "s|$WORKING_DIRECTORY/||g")
+        fi
+        echo "MODIFIED_FILES=${MODIFIED_FILES}" >> $GITHUB_ENV
+        
+        if [ "${ALL_CHANGED_FILES_COUNT}" -gt 0 ]; then
+          echo "HAS_MODIFIED_FILES=true" >> $GITHUB_ENV
+        else
+          echo "HAS_MODIFIED_FILES=false" >> $GITHUB_ENV
+        fi
+
+    - name: Code Sniffer
+      shell: bash
+      run: |
+        if [ "${{ inputs.full-analysis }}" = "true" ]; then
+          input_directories="${{ inputs.directories }}"
+          directories_with_spaces="${input_directories//,/ }"
+          /var/www/coding-standards/vendor/bin/phpcs ${directories_with_spaces}
+        else
+          if [ -z "${{ env.HAS_MODIFIED_FILES }}" ]; then
+            echo "No modified files detected."
+            exit 0
+          fi
+          /var/www/coding-standards/vendor/bin/phpcs ${{ env.MODIFIED_FILES }}
+        fi
